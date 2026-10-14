@@ -30,16 +30,14 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Playlist leh search support kim thlap
+# Direct stream settings (File download ngai lovin direct URL a stream nghal ang)
 ytdl_format_options = {
     'format': 'bestaudio/best',
-    'outtmpl': 'song_cache.%(ext)s',
     'noplaylist': False,
     'quiet': True,
     'no_warnings': True,
-    'default_search': 'scsearch1',  # Hla hming zawn nan cloud-ah a tluang ber
+    'default_search': 'scsearch1',
     'source_address': '0.0.0.0',
-    'extract_flat': 'in_playlist',
 }
 
 ffmpeg_options = {
@@ -106,27 +104,19 @@ class AddToPlaylistModal(Modal, title="Playlist-ah Dahna"):
         else:
             await interaction.response.send_message(f"ℹ️ Chu hla chu Playlist **{p_name}**-ah a awm sa tawh reng mai.", ephemeral=True)
 
-def cleanup_cache():
-    for f in os.listdir("."):
-        if f.startswith("song_cache."):
-            try:
-                os.remove(f)
-            except Exception:
-                pass
-
 def play_next(ctx):
     queue = get_queue(ctx.guild.id)
     if queue and ctx.voice_client:
         next_song = queue.pop(0)
         current_songs[ctx.guild.id] = next_song['title']
         try:
-            cleanup_cache()
-            info = ytdl.extract_info(next_song['search_url'], download=True)
+            # Direct streaming URL lak chhuahna
+            info = ytdl.extract_info(next_song['search_url'], download=False)
             if 'entries' in info and info['entries']:
                 info = info['entries'][0]
-            filename = ytdl.prepare_filename(info)
+            audio_url = info['url']
 
-            source = discord.FFmpegPCMAudio(filename, **ffmpeg_options)
+            source = discord.FFmpegPCMAudio(audio_url, **ffmpeg_options)
             ctx.voice_client.play(source, after=lambda e: play_next(ctx))
 
             panel_view = MusicControlPanel(ctx)
@@ -139,7 +129,6 @@ def play_next(ctx):
             play_next(ctx)
     else:
         current_songs.pop(ctx.guild.id, None)
-        cleanup_cache()
 
 class MusicControlPanel(View):
     def __init__(self, ctx):
@@ -196,7 +185,7 @@ class MusicControlPanel(View):
         playlists = load_saved_playlists()
         gid = str(interaction.guild.id)
         if gid not in playlists or not playlists[gid]:
-            await interaction.response.send_message("Playlist save a la awm lo. **[💾 Save]** button hmetin hla play lai hi save rawh le!", ephemeral=True)
+            await interaction.response.send_message("Playlist save a la awm lo. **[💾 Save]** button hmetin save rawh le!", ephemeral=True)
             return
         msg = "**📂 I Playlist Save-te:**\n"
         for pl_name, songs in playlists[gid].items():
@@ -267,7 +256,6 @@ async def play(ctx, *, search):
             data = await loop.run_in_executor(None, lambda: ytdl.extract_info(search, download=False))
             queue = get_queue(ctx.guild.id)
 
-            # Playlist a nih chuan
             if 'entries' in data and len(data['entries']) > 1:
                 count = 0
                 for entry in data['entries']:
@@ -367,4 +355,3 @@ if token:
     bot.run(token)
 else:
     print("Error: DISCORD_TOKEN environment variable a awm lo!")
-                
