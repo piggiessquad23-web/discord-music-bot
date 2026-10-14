@@ -7,6 +7,10 @@ import json
 import os
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
+import static_ffmpeg
+
+# Automatic FFmpeg path set-na
+static_ffmpeg.add_paths()
 
 # Render Web Service health-check bypass
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -30,7 +34,6 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Direct stream settings (File download ngai lovin direct URL a stream nghal ang)
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'noplaylist': False,
@@ -110,7 +113,6 @@ def play_next(ctx):
         next_song = queue.pop(0)
         current_songs[ctx.guild.id] = next_song['title']
         try:
-            # Direct streaming URL lak chhuahna
             info = ytdl.extract_info(next_song['search_url'], download=False)
             if 'entries' in info and info['entries']:
                 info = info['entries'][0]
@@ -202,8 +204,6 @@ class MusicControlPanel(View):
         else:
             for i, s in enumerate(q[:10], start=1):
                 msg += f"{i}. {s['title']}\n"
-            if len(q) > 10:
-                msg += f"...leh hla {len(q) - 10} dang.\n"
         await interaction.response.send_message(msg, ephemeral=True)
 
     @button(label="Leave", style=discord.ButtonStyle.gray, emoji="👋", row=1)
@@ -355,3 +355,4 @@ if token:
     bot.run(token)
 else:
     print("Error: DISCORD_TOKEN environment variable a awm lo!")
+            
