@@ -1,850 +1,404 @@
-import os
-import asyncio
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
-
 import discord
 from discord.ext import commands
+from discord.ui import View, button, Button, Modal, TextInput
 import yt_dlp
+import asyncio
+import json
+import os
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import static_ffmpeg
+import urllib.request
+import urllib.parse
+import re
 
+try:
+    static_ffmpeg.add_paths()
+except Exception:
+    pass
 
-# =========================================================
-# CONFIG
-# =========================================================
-
-TOKEN = os.getenv("DISCORD_TOKEN")
-
-if not TOKEN:
-    raise RuntimeError("DISCORD_TOKEN environment variable is missing.")
-
-
-# =========================================================
-# RENDER HEALTH SERVER
-# =========================================================
-
-PORT = int(os.getenv("PORT", "8080"))
-
-
-class HealthHandler(BaseHTTPRequestHandler):
-
+# Render Web Service health-check bypass
+class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
-        self.send_header("Content-type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"Discord Music Bot is running!")
+        self.wfile.write(b"Music bot is online and healthy!")
 
     def log_message(self, format, *args):
-        return
+        pass
 
-
-def start_health_server():
-    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
+def run_web_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
     server.serve_forever()
 
-
-threading.Thread(
-    target=start_health_server,
-    daemon=True
-).start()
-
-
-# =========================================================
-# DISCORD SETUP
-# =========================================================
+threading.Thread(target=run_web_server, daemon=True).start()
 
 intents = discord.Intents.default()
 intents.message_content = True
-intents.voice_states = True
-intents.guilds = True
 
-bot = commands.Bot(
-    command_prefix="!",
-    intents=intents
-)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-
-# =========================================================
-# YT-DLP CONFIG
-# =========================================================
-
-ytdl_options = {
-    "format": "bestaudio/best",
-    "noplaylist": True,
-    "quiet": True,
-    "no_warnings": True,
-    "default_search": "ytsearch",
-    "source_address": "0.0.0.0",
-    "cachedir": False,
-
-    "extractor_args": {
-        "youtube": {
-            "player_client": [
-                "android",
-                "web"
-            ]
+# Audio format tha ber leh Cloud-a format bo lo tura settings
+ytdl_format_options = {
+    'format': 'bestaudio[ext=m4a]/bestaudio/best',
+    'noplaylist': True,
+    'quiet': True,
+    'no_warnings': True,
+    'source_address': '0.0.0.0',
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['android', 'ios'],
         }
-    },
-
-    "http_headers": {
-        "User-Agent": (
-            "Mozilla/5.0 "
-            "(Linux; Android 12) "
-            "AppleWebKit/537.36 "
-            "(KHTML, like Gecko) "
-            "Chrome/140.0 Mobile Safari/537.36"
-        )
     }
 }
 
-
-# ---------------------------------------------------------
-# COOKIES
-# ---------------------------------------------------------
-
-COOKIE_FILE = "cookies.txt"
-
-if os.path.exists(COOKIE_FILE):
-    ytdl_options["cookiefile"] = COOKIE_FILE
-    print("🍪 cookies.txt detected")
-else:
-    print("ℹ️ cookies.txt not found - continuing without cookies")
-
-
-ytdl = yt_dlp.YoutubeDL(ytdl_options)
-
-
-# =========================================================
-# FFMPEG
-# =========================================================
-
-FFMPEG_OPTIONS = {
-    "before_options": (
-        "-reconnect 1 "
-        "-reconnect_streamed 1 "
-        "-reconnect_delay_max 5 "
-        "-nostdin"
-    ),
-    "options": (
-        "-vn "
-        "-loglevel warning"
-    )
+ffmpeg_options = {
+    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+    'options': '-vn',
 }
 
+ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 
-# =========================================================
-# MUSIC DATA
-# =========================================================
+def get_youtube_video_url(query):
+    # Mix Playlist / Radio link a nih chuan a video ID chauh la hrang rawh
+    if "list=RD" in query or "list=" in query:
+        match = re.search(r"v=([0-9A-Za-z_-]{11})", query)
+        if match:
+            return f"https://www.youtube.com/watch?v={match.group(1)}"
 
-guild_queues = {}
-guild_now_playing = {}
-guild_text_channels = {}
+    # Link pangngai a nih chuan
+    if query.startswith("http://") or query.startswith("https://"):
+        return query
 
+    # Hla hming zawnna: YouTube direct video URL zawng rawh
+    try:
+        encoded_query = urllib.parse.quote(query)
+        search_url = f"https://www.youtube.com/results?search_query={encoded_query}"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        req = urllib.request.Request(search_url, headers=headers)
+        html = urllib.request.urlopen(req, timeout=10).read().decode('utf-8')
+        video_ids = re.findall(r"watch\?v=([0-9A-Za-z_-]{11})", html)
+        if video_ids:
+            return f"https://www.youtube.com/watch?v={video_ids[0]}"
+    except Exception as e:
+        print(f"Direct scraping error: {e}")
+    return query
+
+song_queues = {}
+current_songs = {}
+PLAYLIST_FILE = "playlists.json"
+
+def load_saved_playlists():
+    if os.path.exists(PLAYLIST_FILE):
+        try:
+            with open(PLAYLIST_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_playlists_to_file(data):
+    with open(PLAYLIST_FILE, "w") as f:
+        json.dump(data, f, indent=4)
 
 def get_queue(guild_id):
+    if guild_id not in song_queues:
+        song_queues[guild_id] = []
+    return song_queues[guild_id]
 
-    if guild_id not in guild_queues:
-        guild_queues[guild_id] = []
+def add_song_to_pl(guild_id, pl_name, song_title):
+    playlists = load_saved_playlists()
+    gid = str(guild_id)
+    if gid not in playlists:
+        playlists[gid] = {}
+    p_name = pl_name.lower().strip()
+    if p_name not in playlists[gid]:
+        playlists[gid][p_name] = []
 
-    return guild_queues[guild_id]
+    if song_title not in playlists[gid][p_name]:
+        playlists[gid][p_name].append(song_title)
+        save_playlists_to_file(playlists)
+        return True
+    return False
 
+class AddToPlaylistModal(Modal, title="Playlist-ah Dahna"):
+    pl_input = TextInput(
+        label="Playlist Hming",
+        placeholder="Entirnan: myfav, zofolk, chill",
+        required=True,
+        max_length=30
+    )
 
-# =========================================================
-# YOUTUBE EXTRACTION
-# =========================================================
+    def __init__(self, current_song_title):
+        super().__init__()
+        self.song_title = current_song_title
 
-async def extract_youtube(query):
+    async def on_submit(self, interaction: discord.Interaction):
+        p_name = self.pl_input.value.strip()
+        added = add_song_to_pl(interaction.guild.id, p_name, self.song_title)
+        if added:
+            await interaction.response.send_message(f"✅ **{self.song_title}** chu Playlist **{p_name}**-ah dah a ni e!", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"ℹ️ Chu hla chu Playlist **{p_name}**-ah a awm sa tawh reng mai.", ephemeral=True)
 
-    loop = asyncio.get_running_loop()
+def cleanup_cache():
+    for f in os.listdir("."):
+        if f.startswith("song_cache."):
+            try:
+                os.remove(f)
+            except Exception:
+                pass
 
-    def extract():
-
+def play_next(ctx):
+    queue = get_queue(ctx.guild.id)
+    if queue and ctx.voice_client:
+        next_song = queue.pop(0)
+        current_songs[ctx.guild.id] = next_song['title']
         try:
-
-            if query.startswith(
-                (
-                    "https://youtube.com/",
-                    "https://www.youtube.com/",
-                    "http://youtube.com/",
-                    "http://www.youtube.com/",
-                    "https://youtu.be/",
-                    "http://youtu.be/"
-                )
-            ):
-
-                search_query = query
-
-            else:
-
-                search_query = f"ytsearch1:{query}"
-
-            info = ytdl.extract_info(
-                search_query,
-                download=False
-            )
-
-            if not info:
-                return None
-
-            if "entries" in info:
-
-                entries = info.get("entries")
-
-                if not entries:
-                    return None
-
-                info = entries[0]
-
-            if not info:
-                return None
-
-            webpage_url = info.get("webpage_url")
-
-            if not webpage_url:
-
-                video_id = info.get("id")
-
-                if video_id:
-                    webpage_url = (
-                        f"https://www.youtube.com/watch?v={video_id}"
-                    )
-
-            return {
-                "title": info.get(
-                    "title",
-                    "Unknown Title"
-                ),
-                "url": webpage_url,
-                "duration": info.get(
-                    "duration",
-                    0
-                ),
-                "thumbnail": info.get(
-                    "thumbnail"
-                )
-            }
-
-        except Exception as e:
-
-            print(
-                f"❌ YouTube extraction error: {e}"
-            )
-
-            return None
-
-    return await loop.run_in_executor(
-        None,
-        extract
-    )
-
-
-# =========================================================
-# STREAM EXTRACTION
-# =========================================================
-
-async def get_audio_url(webpage_url):
-
-    loop = asyncio.get_running_loop()
-
-    def extract_stream():
-
-        try:
-
-            info = ytdl.extract_info(
-                webpage_url,
-                download=False
-            )
-
-            if not info:
-                return None
-
-            if "entries" in info:
-
-                entries = info.get("entries")
-
-                if not entries:
-                    return None
-
-                info = entries[0]
-
-            stream_url = info.get("url")
-
-            if not stream_url:
-                return None
-
-            return stream_url
-
-        except Exception as e:
-
-            print(
-                f"❌ Stream extraction error: {e}"
-            )
-
-            return None
-
-    return await loop.run_in_executor(
-        None,
-        extract_stream
-    )
-
-
-# =========================================================
-# EMBED
-# =========================================================
-
-def make_now_playing_embed(song):
-
-    embed = discord.Embed(
-        title="🎵 Now Playing",
-        description=f"**{song['title']}**",
-        color=discord.Color.blurple()
-    )
-
-    if song.get("thumbnail"):
-        embed.set_thumbnail(
-            url=song["thumbnail"]
-        )
-
-    return embed
-
-
-# =========================================================
-# PLAY NEXT
-# =========================================================
-
-async def play_next(guild):
-
-    guild_id = guild.id
-    queue = get_queue(guild_id)
-
-    voice = guild.voice_client
-
-    if not voice:
-        guild_now_playing.pop(
-            guild_id,
-            None
-        )
-        return
-
-    if not queue:
-
-        guild_now_playing.pop(
-            guild_id,
-            None
-        )
-
-        try:
-
-            await voice.disconnect()
-
-        except Exception:
-            pass
-
-        return
-
-    song = queue.pop(0)
-
-    guild_now_playing[guild_id] = song
-
-    text_channel = guild_text_channels.get(
-        guild_id
-    )
-
-    try:
-
-        stream_url = await get_audio_url(
-            song["url"]
-        )
-
-        if not stream_url:
-
-            if text_channel:
-                await text_channel.send(
-                    "❌ He song stream URL ka hmuh thei lo."
-                )
-
-            await play_next(guild)
-            return
-
-        source = discord.FFmpegPCMAudio(
-            stream_url,
-            **FFMPEG_OPTIONS
-        )
-
-        def after_play(error):
-
-            if error:
-                print(
-                    f"FFmpeg error: {error}"
-                )
-
-            future = asyncio.run_coroutine_threadsafe(
-                play_next(guild),
+            cleanup_cache()
+            info = ytdl.extract_info(next_song['search_url'], download=True)
+            if 'entries' in info and info['entries']:
+                info = info['entries'][0]
+            filename = ytdl.prepare_filename(info)
+
+            source = discord.FFmpegPCMAudio(filename, **ffmpeg_options)
+            ctx.voice_client.play(source, after=lambda e: play_next(ctx))
+
+            panel_view = MusicControlPanel(ctx)
+            asyncio.run_coroutine_threadsafe(
+                ctx.send(f"🎵 **Tunah ka play mek:** {next_song['title']}", view=panel_view),
                 bot.loop
             )
+        except Exception as e:
+            print(f"Error in play_next: {e}")
+            play_next(ctx)
+    else:
+        current_songs.pop(ctx.guild.id, None)
+        cleanup_cache()
 
-            try:
-                future.result()
-            except Exception as e:
-                print(
-                    f"❌ Next song error: {e}"
-                )
+class MusicControlPanel(View):
+    def __init__(self, ctx):
+        super().__init__(timeout=None)
+        self.ctx = ctx
 
-        voice.play(
-            source,
-            after=after_play
-        )
-
-        if text_channel:
-
-            await text_channel.send(
-                embed=make_now_playing_embed(song)
-            )
-
-    except Exception as e:
-
-        print(
-            f"❌ Playback error: {e}"
-        )
-
-        if text_channel:
-
-            await text_channel.send(
-                f"❌ Playback error: `{e}`"
-            )
-
-        await play_next(guild)
-
-
-# =========================================================
-# CONNECT VOICE
-# =========================================================
-
-async def connect_to_voice(ctx):
-
-    if not ctx.author.voice:
-
-        await ctx.send(
-            "❌ Voice channel-ah lut lo.",
-            ephemeral=True
-        )
-
-        return None
-
-    channel = ctx.author.voice.channel
-
-    voice = ctx.guild.voice_client
-
-    try:
-
-        if voice:
-
-            if voice.channel != channel:
-
-                await voice.move_to(channel)
-
+    @button(label="Pause", style=discord.ButtonStyle.secondary, emoji="⏸️", row=0)
+    async def pause_button(self, interaction: discord.Interaction, btn: Button):
+        vc = interaction.guild.voice_client
+        if vc and vc.is_playing():
+            vc.pause()
+            await interaction.response.send_message("⏸️ Hla pause a ni e.", ephemeral=True)
         else:
-
-            voice = await channel.connect()
-
-        return voice
-
-    except Exception as e:
-
-        await ctx.send(
-            f"❌ Voice connect error: `{e}`"
-        )
-
-        return None
-
-
-# =========================================================
-# PLAY COMMAND
-# =========================================================
-
-@bot.command(name="play")
-async def play(ctx, *, query=None):
-
-    if not query:
-
-        await ctx.send(
-            "❌ Example: `!play Alan Walker Faded`"
-        )
-
-        return
-
-    voice = await connect_to_voice(ctx)
-
-    if not voice:
-        return
-
-    guild_id = ctx.guild.id
-
-    guild_text_channels[guild_id] = ctx.channel
-
-    msg = await ctx.send(
-        "🔎 YouTube-ah ka zawng mek..."
-    )
-
-    song = await extract_youtube(query)
-
-    if not song:
-
-        await msg.edit(
-            content=(
-                "❌ YouTube song hi ka hmuh thei lo.\n"
-                "Link dik emaw song name dik zawk hmang rawh."
-            )
-        )
-
-        return
-
-    queue = get_queue(guild_id)
-
-    queue.append(song)
-
-    if voice.is_playing() or voice.is_paused():
-
-        await msg.edit(
-            content=(
-                f"✅ Queue-ah dah tawh.\n"
-                f"🎵 **{song['title']}**\n"
-                f"📌 Queue: `{len(queue)}`"
-            )
-        )
-
-    else:
-
-        await msg.delete()
-
-        await play_next(ctx.guild)
-
-
-# =========================================================
-# SKIP
-# =========================================================
-
-@bot.command(name="skip")
-async def skip(ctx):
-
-    voice = ctx.guild.voice_client
-
-    if not voice:
-
-        await ctx.send(
-            "❌ Voice channel-ah ka awm lo."
-        )
-
-        return
-
-    if not voice.is_playing():
-
-        await ctx.send(
-            "❌ Song play mek a awm lo."
-        )
-
-        return
-
-    voice.stop()
-
-    await ctx.send(
-        "⏭️ Song skip a ni."
-    )
-
-
-# =========================================================
-# PAUSE
-# =========================================================
-
-@bot.command(name="pause")
-async def pause(ctx):
-
-    voice = ctx.guild.voice_client
-
-    if not voice:
-
-        await ctx.send(
-            "❌ Bot voice channel-ah a awm lo."
-        )
-
-        return
-
-    if voice.is_playing():
-
-        voice.pause()
-
-        await ctx.send(
-            "⏸️ Paused."
-        )
-
-    else:
-
-        await ctx.send(
-            "❌ Song play mek a awm lo."
-        )
-
-
-# =========================================================
-# RESUME
-# =========================================================
-
-@bot.command(name="resume")
-async def resume(ctx):
-
-    voice = ctx.guild.voice_client
-
-    if not voice:
-
-        await ctx.send(
-            "❌ Bot voice channel-ah a awm lo."
-        )
-
-        return
-
-    if voice.is_paused():
-
-        voice.resume()
-
-        await ctx.send(
-            "▶️ Resumed."
-        )
-
-    else:
-
-        await ctx.send(
-            "❌ Song pause a ni lo."
-        )
-
-
-# =========================================================
-# STOP
-# =========================================================
-
-@bot.command(name="stop")
-async def stop(ctx):
-
-    voice = ctx.guild.voice_client
-
-    if not voice:
-
-        await ctx.send(
-            "❌ Bot voice channel-ah a awm lo."
-        )
-
-        return
-
-    queue = get_queue(
-        ctx.guild.id
-    )
-
-    queue.clear()
-
-    guild_now_playing.pop(
-        ctx.guild.id,
-        None
-    )
-
-    if voice.is_playing() or voice.is_paused():
-
-        voice.stop()
-
-    await ctx.send(
-        "⏹️ Playback stopped leh queue clear."
-    )
-
-
-# =========================================================
-# LEAVE
-# =========================================================
-
-@bot.command(name="leave")
-async def leave(ctx):
-
-    voice = ctx.guild.voice_client
-
-    if not voice:
-
-        await ctx.send(
-            "❌ Bot voice channel-ah a awm lo."
-        )
-
-        return
-
-    queue = get_queue(
-        ctx.guild.id
-    )
-
-    queue.clear()
-
-    guild_now_playing.pop(
-        ctx.guild.id,
-        None
-    )
-
-    await voice.disconnect()
-
-    await ctx.send(
-        "👋 Voice channel ka chhuak."
-    )
-
-
-# =========================================================
-# QUEUE
-# =========================================================
-
-@bot.command(name="queue")
-async def show_queue(ctx):
-
-    queue = get_queue(
-        ctx.guild.id
-    )
-
-    current = guild_now_playing.get(
-        ctx.guild.id
-    )
-
-    embed = discord.Embed(
-        title="🎶 Music Queue",
-        color=discord.Color.blurple()
-    )
-
-    if current:
-
-        embed.add_field(
-            name="▶️ Now Playing",
-            value=current["title"],
-            inline=False
-        )
-
-    if queue:
-
-        text = ""
-
-        for index, song in enumerate(
-            queue[:10],
-            start=1
-        ):
-
-            text += (
-                f"`{index}.` "
-                f"{song['title']}\n"
-            )
-
-        embed.add_field(
-            name="📋 Up Next",
-            value=text,
-            inline=False
-        )
-
-        if len(queue) > 10:
-
-            embed.set_footer(
-                text=(
-                    f"+ {len(queue) - 10} more songs"
-                )
-            )
-
-    else:
-
-        embed.add_field(
-            name="📋 Up Next",
-            value="Queue empty.",
-            inline=False
-        )
-
-    await ctx.send(
-        embed=embed
-    )
-
-
-# =========================================================
-# NOW PLAYING
-# =========================================================
-
-@bot.command(name="np")
-async def now_playing(ctx):
-
-    song = guild_now_playing.get(
-        ctx.guild.id
-    )
-
-    if not song:
-
-        await ctx.send(
-            "❌ Song play mek a awm lo."
-        )
-
-        return
-
-    await ctx.send(
-        embed=make_now_playing_embed(song)
-    )
-
-
-# =========================================================
-# CONTROL PANEL
-# =========================================================
-
-class MusicControlView(discord.ui.View):
-
-    def __init__(self):
-
-        super().__init__(
-            timeout=None
-        )
-
-
-    @discord.ui.button(
-        label="Pause",
-        emoji="⏸️",
-        style=discord.ButtonStyle.primary,
-        custom_id="music_pause"
-    )
-    async def pause_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
-    ):
-
-        voice = interaction.guild.voice_client
-
-        if not voice:
-
-            await interaction.response.send_message(
-                "❌ Bot voice channel-ah a awm lo.",
-                ephemeral=True
-            )
-
+            await interaction.response.send_message("Hla play mek a awm lo.", ephemeral=True)
+
+    @button(label="Resume", style=discord.ButtonStyle.success, emoji="▶️", row=0)
+    async def resume_button(self, interaction: discord.Interaction, btn: Button):
+        vc = interaction.guild.voice_client
+        if vc and vc.is_paused():
+            vc.resume()
+            await interaction.response.send_message("▶️ Hla play chhunzawm a ni e.", ephemeral=True)
+        else:
+            await interaction.response.send_message("Hla pause lai a awm lo.", ephemeral=True)
+
+    @button(label="Skip", style=discord.ButtonStyle.primary, emoji="⏭️", row=0)
+    async def skip_button(self, interaction: discord.Interaction, btn: Button):
+        vc = interaction.guild.voice_client
+        if vc and (vc.is_playing() or vc.is_paused()):
+            vc.stop()
+            await interaction.response.send_message("⏭️ A dawt ami kan play ang e!", ephemeral=True)
+        else:
+            await interaction.response.send_message("Hla skip tur a awm lo.", ephemeral=True)
+
+    @button(label="Stop", style=discord.ButtonStyle.danger, emoji="⏹️", row=0)
+    async def stop_button(self, interaction: discord.Interaction, btn: Button):
+        vc = interaction.guild.voice_client
+        get_queue(interaction.guild.id).clear()
+        if vc and (vc.is_playing() or vc.is_paused()):
+            vc.stop()
+            await interaction.response.send_message("⏹️ Hla leh queue tih tawp a ni e.", ephemeral=True)
+        else:
+            await interaction.response.send_message("Hla play mek a awm lo.", ephemeral=True)
+
+    @button(label="Save", style=discord.ButtonStyle.green, emoji="💾", row=1)
+    async def save_to_playlist_button(self, interaction: discord.Interaction, btn: Button):
+        song = current_songs.get(interaction.guild.id)
+        if not song:
+            await interaction.response.send_message("Hla play mek a awm lo.", ephemeral=True)
             return
+        await interaction.response.send_modal(AddToPlaylistModal(song))
 
-        if voice.is_playing():
+    @button(label="Playlists", style=discord.ButtonStyle.primary, emoji="📂", row=1)
+    async def playlists_button(self, interaction: discord.Interaction, btn: Button):
+        playlists = load_saved_playlists()
+        gid = str(interaction.guild.id)
+        if gid not in playlists or not playlists[gid]:
+            await interaction.response.send_message("Playlist save a la awm lo. **[💾 Save]** button hmetin save rawh le!", ephemeral=True)
+            return
+        msg = "**📂 I Playlist Save-te:**\n"
+        for pl_name, songs in playlists[gid].items():
+            msg += f"• **{pl_name}** ({len(songs)} songs)\n"
+        await interaction.response.send_message(msg, ephemeral=True)
 
-            voice.pause()
-
-            await interaction.response.send_message(
-                "⏸️ Paused.",
-                ephemeral=True
-            )
-
+    @button(label="Queue", style=discord.ButtonStyle.secondary, emoji="📋", row=1)
+    async def queue_button(self, interaction: discord.Interaction, btn: Button):
+        q = get_queue(interaction.guild.id)
+        curr = current_songs.get(interaction.guild.id, "Awm lo")
+        msg = f"🎶 **Play mek:** {curr}\n\n**📋 Queue:**\n"
+        if not q:
+            msg += "Hla dang dah a la awm lo."
         else:
+            for i, s in enumerate(q[:10], start=1):
+                msg += f"{i}. {s['title']}\n"
+        await interaction.response.send_message(msg, ephemeral=True)
 
-            await interaction.response.send_message(
-                "❌ Song play mek a awm lo.",
-                ephemeral=True
-            )
+    @button(label="Leave", style=discord.ButtonStyle.gray, emoji="👋", row=1)
+    async def leave_button(self, interaction: discord.Interaction, btn: Button):
+        vc = interaction.guild.voice_client
+        get_queue(interaction.guild.id).clear()
+        if vc:
+            await vc.disconnect()
+            await interaction.response.send_message("👋 Ka chhuak ta e!", ephemeral=True)
+        else:
+            await interaction.response.send_message("Voice channel-ah ka awm lo.", ephemeral=True)
 
+@bot.event
+async def on_ready():
+    print(f"✅ Bot a inpeih fel ta e: {bot.user}")
 
-    @discord.ui.button(
-        label="Resume",
-        emoji="▶️",
-        style=discord.ButtonStyle.success,
-        custom_id="music_resume"
-    )
-    async def resume_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
-    ):
+@bot.command()
+async def join(ctx):
+    if ctx.author.voice:
+        channel = ctx.author.voice.channel
+        if ctx.voice_client:
+            await ctx.voice_client.move_to(channel)
+        else:
+            await channel.connect()
+        await ctx.send(f"🔊 **{channel.name}**-ah ka lo lut e!")
+    else:
+        await ctx.send("Voice channel-ah lut hmasa phawt rawh!")
 
-        voice = interaction.guild.voice_client
+@bot.command()
+async def leave(ctx):
+    get_queue(ctx.guild.id).clear()
+    if ctx.voice_client:
+        await ctx.voice_client.disconnect()
+        await ctx.send("👋 Ka chhuak ta e!")
+    else:
+        await ctx.send("Voice channel-ah ka awm lo.")
 
-        if not voice
+@bot.command()
+async def play(ctx, *, search):
+    if not ctx.author.voice:
+        await ctx.send("Voice channel-ah lut hmasa phawt rawh!")
+        return
+
+    if not ctx.voice_client:
+        await ctx.author.voice.channel.connect()
+
+    async with ctx.typing():
+        loop = asyncio.get_event_loop()
+        try:
+            target_url = await loop.run_in_executor(None, lambda: get_youtube_video_url(search))
+            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(target_url, download=False))
+            queue = get_queue(ctx.guild.id)
+
+            if 'entries' in data and len(data['entries']) > 1:
+                count = 0
+                for entry in data['entries']:
+                    if entry:
+                        title = entry.get('title', 'Hla')
+                        url = entry.get('webpage_url') or entry.get('url')
+                        queue.append({'title': title, 'search_url': url})
+                        count += 1
+                await ctx.send(f"📑 Playlist atangin hla **{count}** queue-ah dah a ni e!")
+            else:
+                entry = data['entries'][0] if 'entries' in data and data['entries'] else data
+                title = entry.get('title', 'Hla')
+                url = entry.get('webpage_url') or entry.get('url', target_url)
+                queue.append({'title': title, 'search_url': url})
+
+                if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
+                    await ctx.send(f"📋 Queue-ah dah a ni e: **{title}**")
+
+            vc = ctx.voice_client
+            if vc and not vc.is_playing() and not vc.is_paused():
+                play_next(ctx)
+
+        except Exception as e:
+            await ctx.send(f"Hla lak chhuah theih a ni lo: {e}")
+            print(f"Error in play: {e}")
+
+@bot.command()
+async def loadplaylist(ctx, name: str):
+    if not ctx.author.voice:
+        await ctx.send("Voice channel-ah lut hmasa phawt rawh!")
+        return
+
+    playlists = load_saved_playlists()
+    guild_id = str(ctx.guild.id)
+
+    if guild_id not in playlists or name.lower() not in playlists[guild_id]:
+        await ctx.send(f"Playlist **{name}** a awm lo.")
+        return
+
+    song_list = playlists[guild_id][name.lower()]
+    await ctx.send(f"🚀 Playlist **{name}** ({len(song_list)} songs) play mek a ni...")
+
+    for song in song_list:
+        await play(ctx, search=song)
+
+@bot.command()
+async def myplaylists(ctx):
+    playlists = load_saved_playlists()
+    guild_id = str(ctx.guild.id)
+
+    if guild_id not in playlists or not playlists[guild_id]:
+        await ctx.send("Playlist a la awm lo. Hla i play laiin **[💾 Save]** button hmet rawh.")
+        return
+
+    msg = "**📂 I Playlist-te:**\n"
+    for pl_name, songs in playlists[guild_id].items():
+        msg += f"• **{pl_name}** ({len(songs)} songs)\n"
+    await ctx.send(msg)
+
+@bot.command()
+async def viewplaylist(ctx, name: str):
+    playlists = load_saved_playlists()
+    guild_id = str(ctx.guild.id)
+    p_name = name.lower()
+
+    if guild_id not in playlists or p_name not in playlists[guild_id]:
+        await ctx.send(f"Playlist **{name}** a awm lo.")
+        return
+
+    songs = playlists[guild_id][p_name]
+    msg = f"🎶 **Playlist: {name.upper()} ({len(songs)} songs)**\n"
+    for i, s in enumerate(songs, start=1):
+        msg += f"{i}. {s}\n"
+    await ctx.send(msg)
+
+@bot.command()
+async def queue(ctx):
+    q = get_queue(ctx.guild.id)
+    curr = current_songs.get(ctx.guild.id, "Awm lo")
+    msg = f"🎶 **Play mek:** {curr}\n\n**📋 Queue:**\n"
+    if not q:
+        msg += "Queue-ah hla dah a awm lo."
+    else:
+        for i, s in enumerate(q[:10], start=1):
+            msg += f"{i}. {s['title']}\n"
+    await ctx.send(msg)
+
+@bot.command()
+async def skip(ctx):
+    vc = ctx.voice_client
+    if vc and (vc.is_playing() or vc.is_paused()):
+        vc.stop()
+        await ctx.send("⏭️ Hla skip a ni e!")
+
+token = os.environ.get("DISCORD_TOKEN")
+if token:
+    bot.run(token)
+else:
+    print("Error: DISCORD_TOKEN environment variable a awm lo!")
+            
