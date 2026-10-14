@@ -8,12 +8,15 @@ import os
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-# Render health check bypass nan web server te tak te
+# Render health check bypass tura web server te tak te
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"Bot is alive!")
+
+    def log_message(self, format, *args):
+        pass  # Log bawlhhlawh ti tlem nan
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
@@ -35,7 +38,6 @@ ytdl_format_options = {
     'no_warnings': True,
     'default_search': 'ytsearch1',
     'source_address': '0.0.0.0',
-    'extract_flat': 'in_playlist',
 }
 
 ffmpeg_options = {
@@ -130,7 +132,7 @@ def play_next(ctx):
                 bot.loop
             )
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"Error in play_next: {e}")
             play_next(ctx)
     else:
         current_songs.pop(ctx.guild.id, None)
@@ -239,6 +241,7 @@ async def play(ctx, *, search):
         await ctx.send("Voice channel-ah lut hmasa phawt rawh!")
         return
 
+    # Voice-a a la luh loh chuan lut nghal rawh se
     if not ctx.voice_client:
         await ctx.author.voice.channel.connect()
 
@@ -248,27 +251,34 @@ async def play(ctx, *, search):
             data = await loop.run_in_executor(None, lambda: ytdl.extract_info(search, download=False))
             queue = get_queue(ctx.guild.id)
 
-            if 'entries' in data:
+            # Playlist dik tak (hla 1 aia tam) a nih chuan
+            if 'entries' in data and len(data['entries']) > 1:
                 count = 0
                 for entry in data['entries']:
                     if entry:
                         title = entry.get('title', 'Hla')
-                        url = entry.get('url') or entry.get('webpage_url')
+                        url = entry.get('webpage_url') or entry.get('url')
                         queue.append({'title': title, 'search_url': url})
                         count += 1
                 await ctx.send(f"📑 Playlist atangin hla **{count}** queue-ah dah a ni e!")
             else:
-                title = data.get('title', 'Hla')
-                url = data.get('webpage_url', search)
+                # Hla mal (search result) a nih chuan
+                entry = data['entries'][0] if 'entries' in data and data['entries'] else data
+                title = entry.get('title', 'Hla')
+                url = entry.get('webpage_url') or entry.get('url', search)
                 queue.append({'title': title, 'search_url': url})
-                await ctx.send(f"📋 Queue-ah dah a ni e: **{title}**")
+                
+                # A hmasa ber a nih lohva queue-a dah a nih chuan
+                if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
+                    await ctx.send(f"📋 Queue-ah dah a ni e: **{title}**")
 
+            # Hla a la play loh chuan play_next ko nghal rawh
             vc = ctx.voice_client
-            if not vc.is_playing() and not vc.is_paused():
+            if vc and not vc.is_playing() and not vc.is_paused():
                 play_next(ctx)
 
         except Exception as e:
-            await ctx.send("Hla/Playlist lak chhuah theih a ni lo.")
+            await ctx.send("Hla lak chhuah theih a ni lo.")
             print(f"Error: {e}")
 
 @bot.command()
@@ -344,4 +354,4 @@ if token:
     bot.run(token)
 else:
     print("Error: DISCORD_TOKEN environment variable a awm lo!")
-        
+    
