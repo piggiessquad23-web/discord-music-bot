@@ -39,19 +39,19 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Direct video audio extractor (Search API block pumpelhna)
+# Requested format not available tibo tura options
 ytdl_format_options = {
-    'format': 'best',
-    'outtmpl': 'song_cache.%(ext)s',
+    'format': 'ba/b/best',
     'noplaylist': False,
     'quiet': True,
     'no_warnings': True,
     'source_address': '0.0.0.0',
     'extract_flat': 'in_playlist',
     'cookiefile': 'cookies.txt',
+    'check_formats': False,
     'extractor_args': {
         'youtube': {
-            'player_client': ['web', 'android'],
+            'player_client': ['ios', 'android', 'web'],
         }
     }
 }
@@ -63,7 +63,6 @@ ffmpeg_options = {
 
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 
-# YouTube search API 403 Forbidden pumpelhna: Direct HTML scraping
 def get_youtube_video_url(query):
     if query.startswith("http://") or query.startswith("https://"):
         return query
@@ -78,7 +77,7 @@ def get_youtube_video_url(query):
             return f"https://www.youtube.com/watch?v={video_ids[0]}"
     except Exception as e:
         print(f"Direct scraping error: {e}")
-    return f"https://www.youtube.com/results?search_query={query}"
+    return query
 
 song_queues = {}
 current_songs = {}
@@ -293,7 +292,6 @@ async def play(ctx, *, search):
     async with ctx.typing():
         loop = asyncio.get_event_loop()
         try:
-            # 403 Forbidden pumpelh nan direct video url zawng hmasa rawh
             target_url = await loop.run_in_executor(None, lambda: get_youtube_video_url(search))
             data = await loop.run_in_executor(None, lambda: ytdl.extract_info(target_url, download=False))
             queue = get_queue(ctx.guild.id)
@@ -397,4 +395,3 @@ if token:
     bot.run(token)
 else:
     print("Error: DISCORD_TOKEN environment variable a awm lo!")
-    
