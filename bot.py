@@ -38,7 +38,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 # YouTube cookie leh JS token bypass settings
 ytdl_format_options = {
-    'format': 'bestaudio/best',
+    'format': 'bestaudio/best/ba/b',
     'outtmpl': 'song_cache.%(ext)s',
     'noplaylist': False,
     'quiet': True,
