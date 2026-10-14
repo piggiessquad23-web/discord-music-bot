@@ -1,14 +1,14 @@
 import discord
 from discord.ext import commands
 from discord.ui import View, button, Button, Modal, TextInput
+import yt_dlp
 import asyncio
 import json
 import os
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import static_ffmpeg
-import urllib.request
-import urllib.parse
+import requests
 import re
 
 try:
@@ -38,64 +38,75 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# Multi-platform audio extractor options
+ytdl_format_options = {
+    'format': 'bestaudio/best',
+    'noplaylist': True,
+    'quiet': True,
+    'no_warnings': True,
+    'source_address': '0.0.0.0',
+    'default_search': 'auto',
+}
+
 ffmpeg_options = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
     'options': '-vn',
 }
 
-# YouTube Cloud Bot-block bypass tura Invidious proxy list
-INVIDIOUS_INSTANCES = [
-    "https://inv.tux.pizza",
-    "https://invidious.nerdvpn.de",
-    "https://yt.artemislena.eu",
-    "https://invidious.private.coffee"
-]
+ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 
-def extract_video_id(query):
-    # Link a nih chuan Video ID la chhuak rawh
-    match = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11})", query)
-    if match:
-        return match.group(1)
-    return None
+# Spotify metadata extraction (API key ngai miah lova embed oEmbed lakna)
+def resolve_spotify_tracks(url):
+    track_queries = []
+    try:
+        # Spotify track link
+        if "open.spotify.com/track/" in url:
+            res = requests.get(f"https://open.spotify.com/oembed?url={url}", timeout=5)
+            if res.status_code == 200:
+                data = res.json()
+                title = data.get("title")
+                if title:
+                    track_queries.append(title)
+        # Spotify album / playlist link (HTML scraping)
+        elif "open.spotify.com/playlist/" in url or "open.spotify.com/album/" in url:
+            res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=8)
+            if res.status_code == 200:
+                titles = re.findall(r'<meta property="music:song" content="([^"]+)"', res.text)
+                for t_url in titles[:25]:  # Hla 25 thleng la rawh
+                    t_res = requests.get(f"https://open.spotify.com/oembed?url={t_url}", timeout=5)
+                    if t_res.status_code == 200:
+                        t_data = t_res.json()
+                        t_title = t_data.get("title")
+                        if t_title:
+                            track_queries.append(t_title)
+    except Exception as e:
+        print(f"Spotify resolve error: {e}")
+    return track_queries
 
-def fetch_youtube_audio(query):
-    video_id = extract_video_id(query)
+def extract_audio_info(query):
+    # Multi-platform search fallback
+    search_queries = []
+    if query.startswith("http://") or query.startswith("https://"):
+        search_queries.append(query)
+    else:
+        search_queries.append(f"scsearch1:{query}")
+        search_queries.append(f"ytsearch1:{query}")
 
-    # Search query a nih chuan direct YouTube scraping hmangin video ID zawng hmasa rawh
-    if not video_id:
+    for q in search_queries:
         try:
-            encoded_query = urllib.parse.quote(query)
-            search_url = f"https://www.youtube.com/results?search_query={encoded_query}"
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-            req = urllib.request.Request(search_url, headers=headers)
-            html = urllib.request.urlopen(req, timeout=8).read().decode('utf-8')
-            video_ids = re.findall(r"watch\?v=([0-9A-Za-z_-]{11})", html)
-            if video_ids:
-                video_id = video_ids[0]
+            data = ytdl.extract_info(q, download=False)
+            if 'entries' in data and data['entries']:
+                entry = data['entries'][0]
+            else:
+                entry = data
+
+            if entry and 'url' in entry:
+                return {
+                    'title': entry.get('title', query),
+                    'url': entry['url']
+                }
         except Exception as e:
-            print(f"Search scrape error: {e}")
-
-    if not video_id:
-        return None
-
-    # Invidious proxy hmangin audio stream link la chhuak rawh (Bot block a bo vek ang)
-    for instance in INVIDIOUS_INSTANCES:
-        try:
-            api_url = f"{instance}/api/v1/videos/{video_id}"
-            req = urllib.request.Request(api_url, headers={'User-Agent': 'Mozilla/5.0'})
-            res = urllib.request.urlopen(req, timeout=6)
-            if res.status == 200:
-                data = json.loads(res.read().decode('utf-8'))
-                title = data.get("title", query)
-                adaptive_formats = data.get("adaptiveFormats", [])
-                
-                # Audio stream tha ber zawng rawh
-                for fmt in adaptive_formats:
-                    if fmt.get("type", "").startswith("audio/"):
-                        audio_url = fmt.get("url")
-                        if audio_url:
-                            return {"title": title, "url": audio_url}
-        except Exception:
+            print(f"Extraction error for {q}: {e}")
             continue
 
     return None
@@ -297,7 +308,27 @@ async def play(ctx, *, search):
 
     async with ctx.typing():
         loop = asyncio.get_event_loop()
-        song_data = await loop.run_in_executor(None, lambda: fetch_youtube_audio(search))
+
+        # 1. Spotify Link a nih chuan
+        if "open.spotify.com" in search:
+            spotify_tracks = await loop.run_in_executor(None, lambda: resolve_spotify_tracks(search))
+            if not spotify_tracks:
+                await ctx.send("Spotify atangin hla lak chhuah theih a ni lo.")
+                return
+
+            await ctx.send(f"🟢 Spotify atangin hla **{len(spotify_tracks)}** lak mek a ni...")
+            for s_name in spotify_tracks:
+                song_info = await loop.run_in_executor(None, lambda name=s_name: extract_audio_info(name))
+                if song_info:
+                    get_queue(ctx.guild.id).append(song_info)
+
+            vc = ctx.voice_client
+            if vc and not vc.is_playing() and not vc.is_paused():
+                play_next(ctx)
+            return
+
+        # 2. Platform dang (YouTube, SoundCloud, Bandcamp, direct search)
+        song_data = await loop.run_in_executor(None, lambda: extract_audio_info(search))
 
         if not song_data:
             await ctx.send("Hla a hmu zo lo tlat mai, hming dang han tum chhin teh.")
@@ -384,4 +415,4 @@ if token:
     bot.run(token)
 else:
     print("Error: DISCORD_TOKEN environment variable a awm lo!")
-            
+        
