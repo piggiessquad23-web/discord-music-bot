@@ -41,7 +41,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 # Direct video audio extractor (Search API block pumpelhna)
 ytdl_format_options = {
-    'format': 'bestaudio/best/ba/b',
+    'format': 'best',
     'outtmpl': 'song_cache.%(ext)s',
     'noplaylist': False,
     'quiet': True,
