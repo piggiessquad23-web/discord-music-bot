@@ -8,22 +8,15 @@ import os
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import static_ffmpeg
-import urllib.request
-import urllib.parse
-import re
 
-# FFmpeg static path load rawh
-try:
-    static_ffmpeg.add_paths()
-except Exception:
-    pass
+static_ffmpeg.add_paths()
 
-# Render Web Service health-check bypass (Free plan-a bot a thih loh nan)
+# Render Web Service health-check bypass
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Music bot is online!")
+        self.wfile.write(b"Bot is online and healthy!")
 
     def log_message(self, format, *args):
         pass
@@ -40,20 +33,14 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# YouTube & Cloud IP block bypass settings (Android client hmangin "Sign in bot" block a bo vek ang)
+# SoundCloud & Audio streaming (Cloud block awm lo)
 ytdl_format_options = {
     'format': 'bestaudio/best',
-    'outtmpl': 'song_cache.%(ext)s',
     'noplaylist': False,
     'quiet': True,
     'no_warnings': True,
+    'default_search': 'scsearch',  # Cloud-ah block miah lo
     'source_address': '0.0.0.0',
-    'extract_flat': 'in_playlist',
-    'extractor_args': {
-        'youtube': {
-            'player_client': ['android', 'ios'],
-        }
-    }
 }
 
 ffmpeg_options = {
@@ -62,26 +49,6 @@ ffmpeg_options = {
 }
 
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
-
-# YouTube search query atanga direct video URL la chhuak tu
-def resolve_media_url(query):
-    # Link pangngai (YouTube / SoundCloud link) a nih sa chuan
-    if query.startswith("http://") or query.startswith("https://"):
-        return query
-
-    # Hla hming ringawt a nih chuan YouTube search atangin direct video link zawng hmasa rawh
-    try:
-        query_encoded = urllib.parse.quote(query)
-        search_url = f"https://www.youtube.com/results?search_query={query_encoded}"
-        req = urllib.request.Request(search_url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
-        html = urllib.request.urlopen(req, timeout=10).read().decode('utf-8')
-        video_ids = re.findall(r"watch\?v=([0-9A-Za-z_-]{11})", html)
-        if video_ids:
-            return f"https://www.youtube.com/watch?v={video_ids[0]}"
-    except Exception as e:
-        print(f"Search resolution error: {e}")
-
-    return f"ytsearch1:{query}"
 
 song_queues = {}
 current_songs = {}
@@ -120,11 +87,10 @@ def add_song_to_pl(guild_id, pl_name, song_title):
         return True
     return False
 
-# Pop-up modal: Hla play lai playlist-a save-na
 class AddToPlaylistModal(Modal, title="Playlist-ah Dahna"):
     pl_input = TextInput(
         label="Playlist Hming",
-        placeholder="Entirnan: fav, zofolk, chill",
+        placeholder="Entirnan: myfav, zofolk",
         required=True,
         max_length=30
     )
@@ -141,20 +107,13 @@ class AddToPlaylistModal(Modal, title="Playlist-ah Dahna"):
         else:
             await interaction.response.send_message(f"ℹ️ Chu hla chu Playlist **{p_name}**-ah a awm sa tawh reng mai.", ephemeral=True)
 
-# A dawt ami play-tu
 def play_next(ctx):
     queue = get_queue(ctx.guild.id)
     if queue and ctx.voice_client:
         next_song = queue.pop(0)
         current_songs[ctx.guild.id] = next_song['title']
         try:
-            # Direct audio stream URL la chhuak rawh
-            info = ytdl.extract_info(next_song['search_url'], download=False)
-            if 'entries' in info and info['entries']:
-                info = info['entries'][0]
-            audio_url = info['url']
-
-            source = discord.FFmpegPCMAudio(audio_url, **ffmpeg_options)
+            source = discord.FFmpegPCMAudio(next_song['audio_url'], **ffmpeg_options)
             ctx.voice_client.play(source, after=lambda e: play_next(ctx))
 
             panel_view = MusicControlPanel(ctx)
@@ -168,7 +127,6 @@ def play_next(ctx):
     else:
         current_songs.pop(ctx.guild.id, None)
 
-# Control Panel Buttons kim thlap
 class MusicControlPanel(View):
     def __init__(self, ctx):
         super().__init__(timeout=None)
@@ -241,8 +199,6 @@ class MusicControlPanel(View):
         else:
             for i, s in enumerate(q[:10], start=1):
                 msg += f"{i}. {s['title']}\n"
-            if len(q) > 10:
-                msg += f"...leh hla {len(q) - 10} dang.\n"
         await interaction.response.send_message(msg, ephemeral=True)
 
     @button(label="Leave", style=discord.ButtonStyle.gray, emoji="👋", row=1)
@@ -286,42 +242,33 @@ async def play(ctx, *, search):
         await ctx.send("Voice channel-ah lut hmasa phawt rawh!")
         return
 
-    # Voice-a a la luh loh chuan automatic connect rawh
     if not ctx.voice_client:
         await ctx.author.voice.channel.connect()
 
     async with ctx.typing():
         loop = asyncio.get_event_loop()
         try:
-            resolved_query = await loop.run_in_executor(None, lambda: resolve_media_url(search))
-            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(resolved_query, download=False))
+            # Query extract rawh
+            query = search if search.startswith("http") else f"scsearch:{search}"
+            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(query, download=False))
+
+            if 'entries' in data and data['entries']:
+                data = data['entries'][0]
+
+            title = data.get('title', 'Hla')
+            audio_url = data['url']
+
+            song_data = {'title': title, 'audio_url': audio_url}
             queue = get_queue(ctx.guild.id)
+            queue.append(song_data)
 
-            # Playlist (hla tam deuh awmna) a nih chuan
-            if 'entries' in data and len(data['entries']) > 1:
-                count = 0
-                for entry in data['entries']:
-                    if entry:
-                        title = entry.get('title', 'Hla')
-                        url = entry.get('webpage_url') or entry.get('url')
-                        queue.append({'title': title, 'search_url': url})
-                        count += 1
-                await ctx.send(f"📑 Playlist atangin hla **{count}** queue-ah dah a ni e!")
+            if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
+                await ctx.send(f"📋 Queue-ah dah a ni e: **{title}**")
             else:
-                entry = data['entries'][0] if 'entries' in data and data['entries'] else data
-                title = entry.get('title', 'Hla')
-                url = entry.get('webpage_url') or entry.get('url', search)
-                queue.append({'title': title, 'search_url': url})
-
-                if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
-                    await ctx.send(f"📋 Queue-ah dah a ni e: **{title}**")
-
-            vc = ctx.voice_client
-            if vc and not vc.is_playing() and not vc.is_paused():
                 play_next(ctx)
 
         except Exception as e:
-            await ctx.send("Hla lak chhuah theih a ni lo. Link emaw hla hming dang han tum chhin teh.")
+            await ctx.send("Hla a hmu zo lo tlat mai, hming dang han tum chhin teh.")
             print(f"Error in play: {e}")
 
 @bot.command()
@@ -334,7 +281,7 @@ async def loadplaylist(ctx, name: str):
     guild_id = str(ctx.guild.id)
 
     if guild_id not in playlists or name.lower() not in playlists[guild_id]:
-        await ctx.send(f"Playlist **{name}** a awm lo. Control panel-a **[📂 Playlists]** button hmangin i en thei.")
+        await ctx.send(f"Playlist **{name}** a awm lo.")
         return
 
     song_list = playlists[guild_id][name.lower()]
@@ -355,22 +302,6 @@ async def myplaylists(ctx):
     msg = "**📂 I Playlist-te:**\n"
     for pl_name, songs in playlists[guild_id].items():
         msg += f"• **{pl_name}** ({len(songs)} songs)\n"
-    await ctx.send(msg)
-
-@bot.command()
-async def viewplaylist(ctx, name: str):
-    playlists = load_saved_playlists()
-    guild_id = str(ctx.guild.id)
-    p_name = name.lower()
-
-    if guild_id not in playlists or p_name not in playlists[guild_id]:
-        await ctx.send(f"Playlist **{name}** a awm lo.")
-        return
-
-    songs = playlists[guild_id][p_name]
-    msg = f"🎶 **Playlist: {name.upper()} ({len(songs)} songs)**\n"
-    for i, s in enumerate(songs, start=1):
-        msg += f"{i}. {s}\n"
     await ctx.send(msg)
 
 @bot.command()
@@ -397,4 +328,3 @@ if token:
     bot.run(token)
 else:
     print("Error: DISCORD_TOKEN environment variable a awm lo!")
-      
