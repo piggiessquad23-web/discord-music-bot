@@ -8,12 +8,12 @@ import os
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-# Render health check bypass
+# 1. Render Web Service health-check bypass
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot is alive!")
+        self.wfile.write(b"Bot is online and healthy!")
 
     def log_message(self, format, *args):
         pass
@@ -30,15 +30,21 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# 2. Cloud Server (Render IP) block pumpelhna iOS/TV client settings
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': 'song_cache.%(ext)s',
     'noplaylist': True,
-    'quiet': False,
-    'no_warnings': False,
+    'quiet': True,
+    'no_warnings': True,
     'default_search': 'ytsearch1',
     'source_address': '0.0.0.0',
-    'username': 'oauth2',
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['ios', 'tvhtml5'],
+            'skip': ['dash', 'hls']
+        }
+    }
 }
 
 ffmpeg_options = {
@@ -57,7 +63,7 @@ def load_saved_playlists():
         try:
             with open(PLAYLIST_FILE, "r") as f:
                 return json.load(f)
-        except:
+        except Exception:
             return {}
     return {}
 
@@ -78,7 +84,7 @@ def add_song_to_pl(guild_id, pl_name, song_title):
     p_name = pl_name.lower().strip()
     if p_name not in playlists[gid]:
         playlists[gid][p_name] = []
-    
+
     if song_title not in playlists[gid][p_name]:
         playlists[gid][p_name].append(song_title)
         save_playlists_to_file(playlists)
@@ -110,7 +116,7 @@ def cleanup_cache():
         if f.startswith("song_cache."):
             try:
                 os.remove(f)
-            except:
+            except Exception:
                 pass
 
 def play_next(ctx):
@@ -127,7 +133,7 @@ def play_next(ctx):
 
             source = discord.FFmpegPCMAudio(filename, **ffmpeg_options)
             ctx.voice_client.play(source, after=lambda e: play_next(ctx))
-            
+
             panel_view = MusicControlPanel(ctx)
             asyncio.run_coroutine_threadsafe(
                 ctx.send(f"🎵 **Tunah ka play mek:** {next_song['title']}", view=panel_view),
@@ -265,7 +271,7 @@ async def play(ctx, *, search):
                 play_next(ctx)
 
         except Exception as e:
-            await ctx.send("Hla lak chhuah theih a ni lo. Link dang han tum chhin teh.")
+            await ctx.send("Hla lak chhuah theih a ni lo. Link dang emaw hla hming dang han tum chhin teh.")
             print(f"Error in play: {e}")
 
 @bot.command()
