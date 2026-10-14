@@ -30,7 +30,6 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# YouTube Cloud datacenter block bypass nan oauth2 plugin hman a ni
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': 'song_cache.%(ext)s',
@@ -201,7 +200,7 @@ class MusicControlPanel(View):
         else:
             for i, s in enumerate(q[:10], start=1):
                 msg += f"{i}. {s['title']}\n"
-    await interaction.response.send_message(msg, ephemeral=True)
+        await interaction.response.send_message(msg, ephemeral=True)
 
     @button(label="Leave", style=discord.ButtonStyle.gray, emoji="👋", row=1)
     async def leave_button(self, interaction: discord.Interaction, btn: Button):
