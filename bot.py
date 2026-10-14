@@ -5,6 +5,22 @@ import yt_dlp
 import asyncio
 import json
 import os
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+# Render health check bypass nan web server te tak te
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is alive!")
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    server.serve_forever()
+
+threading.Thread(target=run_web_server, daemon=True).start()
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -328,4 +344,4 @@ if token:
     bot.run(token)
 else:
     print("Error: DISCORD_TOKEN environment variable a awm lo!")
-  
+        
