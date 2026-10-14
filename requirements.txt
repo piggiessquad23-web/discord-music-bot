@@ -1,4 +1,4 @@
 discord.py[voice]
 yt-dlp
-yt-dlp-youtube-oauth2
 PyNaCl
+static-ffmpeg
