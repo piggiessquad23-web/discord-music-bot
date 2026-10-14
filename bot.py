@@ -11,12 +11,12 @@ import static_ffmpeg
 
 static_ffmpeg.add_paths()
 
-# Render Web Service health-check bypass
+# Render-ah a thih loh nana web server te tak te
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot is online and healthy!")
+        self.wfile.write(b"Bot is alive!")
 
     def log_message(self, format, *args):
         pass
@@ -33,14 +33,15 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# SoundCloud & Audio streaming (Cloud block awm lo)
+# Termux-a kan hman ang chiah YouTube settings
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'noplaylist': False,
     'quiet': True,
     'no_warnings': True,
-    'default_search': 'scsearch',  # Cloud-ah block miah lo
+    'default_search': 'ytsearch1',
     'source_address': '0.0.0.0',
+    'extract_flat': 'in_playlist',
 }
 
 ffmpeg_options = {
@@ -113,7 +114,12 @@ def play_next(ctx):
         next_song = queue.pop(0)
         current_songs[ctx.guild.id] = next_song['title']
         try:
-            source = discord.FFmpegPCMAudio(next_song['audio_url'], **ffmpeg_options)
+            info = ytdl.extract_info(next_song['search_url'], download=False)
+            if 'entries' in info and info['entries']:
+                info = info['entries'][0]
+            audio_url = info['url']
+
+            source = discord.FFmpegPCMAudio(audio_url, **ffmpeg_options)
             ctx.voice_client.play(source, after=lambda e: play_next(ctx))
 
             panel_view = MusicControlPanel(ctx)
@@ -248,27 +254,33 @@ async def play(ctx, *, search):
     async with ctx.typing():
         loop = asyncio.get_event_loop()
         try:
-            # Query extract rawh
-            query = search if search.startswith("http") else f"scsearch:{search}"
-            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(query, download=False))
-
-            if 'entries' in data and data['entries']:
-                data = data['entries'][0]
-
-            title = data.get('title', 'Hla')
-            audio_url = data['url']
-
-            song_data = {'title': title, 'audio_url': audio_url}
+            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(search, download=False))
             queue = get_queue(ctx.guild.id)
-            queue.append(song_data)
 
-            if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
-                await ctx.send(f"📋 Queue-ah dah a ni e: **{title}**")
+            if 'entries' in data and len(data['entries']) > 1:
+                count = 0
+                for entry in data['entries']:
+                    if entry:
+                        title = entry.get('title', 'Hla')
+                        url = entry.get('webpage_url') or entry.get('url')
+                        queue.append({'title': title, 'search_url': url})
+                        count += 1
+                await ctx.send(f"📑 Playlist atangin hla **{count}** queue-ah dah a ni e!")
             else:
+                entry = data['entries'][0] if 'entries' in data and data['entries'] else data
+                title = entry.get('title', 'Hla')
+                url = entry.get('webpage_url') or entry.get('url', search)
+                queue.append({'title': title, 'search_url': url})
+
+                if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
+                    await ctx.send(f"📋 Queue-ah dah a ni e: **{title}**")
+
+            vc = ctx.voice_client
+            if vc and not vc.is_playing() and not vc.is_paused():
                 play_next(ctx)
 
         except Exception as e:
-            await ctx.send("Hla a hmu zo lo tlat mai, hming dang han tum chhin teh.")
+            await ctx.send("Hla lak chhuah theih a ni lo. Link emaw hla hming dang han tum chhin teh.")
             print(f"Error in play: {e}")
 
 @bot.command()
@@ -281,7 +293,7 @@ async def loadplaylist(ctx, name: str):
     guild_id = str(ctx.guild.id)
 
     if guild_id not in playlists or name.lower() not in playlists[guild_id]:
-        await ctx.send(f"Playlist **{name}** a awm lo.")
+        await ctx.send(f"Playlist **{name}** a awm lo. Control panel-a **[📂 Playlists]** button hmangin i en thei.")
         return
 
     song_list = playlists[guild_id][name.lower()]
@@ -302,6 +314,22 @@ async def myplaylists(ctx):
     msg = "**📂 I Playlist-te:**\n"
     for pl_name, songs in playlists[guild_id].items():
         msg += f"• **{pl_name}** ({len(songs)} songs)\n"
+    await ctx.send(msg)
+
+@bot.command()
+async def viewplaylist(ctx, name: str):
+    playlists = load_saved_playlists()
+    guild_id = str(ctx.guild.id)
+    p_name = name.lower()
+
+    if guild_id not in playlists or p_name not in playlists[guild_id]:
+        await ctx.send(f"Playlist **{name}** a awm lo.")
+        return
+
+    songs = playlists[guild_id][p_name]
+    msg = f"🎶 **Playlist: {name.upper()} ({len(songs)} songs)**\n"
+    for i, s in enumerate(songs, start=1):
+        msg += f"{i}. {s}\n"
     await ctx.send(msg)
 
 @bot.command()
@@ -328,3 +356,4 @@ if token:
     bot.run(token)
 else:
     print("Error: DISCORD_TOKEN environment variable a awm lo!")
+            
