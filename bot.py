@@ -39,19 +39,16 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Requested format not available tibo tura options
+# Format restriction paih vek a ni (format engpawh awm apiang a la tawp ang)
 ytdl_format_options = {
-    'format': 'ba/b/best',
-    'noplaylist': False,
+    'noplaylist': True,
     'quiet': True,
     'no_warnings': True,
     'source_address': '0.0.0.0',
-    'extract_flat': 'in_playlist',
     'cookiefile': 'cookies.txt',
-    'check_formats': False,
     'extractor_args': {
         'youtube': {
-            'player_client': ['ios', 'android', 'web'],
+            'player_client': ['android', 'web'],
         }
     }
 }
@@ -64,8 +61,10 @@ ffmpeg_options = {
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 
 def get_youtube_video_url(query):
+    # Link a nih chuan direct-in pe rawh
     if query.startswith("http://") or query.startswith("https://"):
         return query
+    # Search a nih chuan YouTube direct video link zawng rawh
     try:
         encoded_query = urllib.parse.quote(query)
         search_url = f"https://www.youtube.com/results?search_query={encoded_query}"
@@ -395,3 +394,4 @@ if token:
     bot.run(token)
 else:
     print("Error: DISCORD_TOKEN environment variable a awm lo!")
+    
