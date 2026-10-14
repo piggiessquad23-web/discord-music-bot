@@ -8,6 +8,9 @@ import os
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import static_ffmpeg
+import urllib.request
+import urllib.parse
+import re
 
 try:
     static_ffmpeg.add_paths()
@@ -36,14 +39,13 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# YouTube cookie leh JS token bypass settings
+# Direct video audio extractor (Search API block pumpelhna)
 ytdl_format_options = {
     'format': 'bestaudio/best/ba/b',
     'outtmpl': 'song_cache.%(ext)s',
     'noplaylist': False,
     'quiet': True,
     'no_warnings': True,
-    'default_search': 'ytsearch1',
     'source_address': '0.0.0.0',
     'extract_flat': 'in_playlist',
     'cookiefile': 'cookies.txt',
@@ -60,6 +62,23 @@ ffmpeg_options = {
 }
 
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
+
+# YouTube search API 403 Forbidden pumpelhna: Direct HTML scraping
+def get_youtube_video_url(query):
+    if query.startswith("http://") or query.startswith("https://"):
+        return query
+    try:
+        encoded_query = urllib.parse.quote(query)
+        search_url = f"https://www.youtube.com/results?search_query={encoded_query}"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        req = urllib.request.Request(search_url, headers=headers)
+        html = urllib.request.urlopen(req, timeout=10).read().decode('utf-8')
+        video_ids = re.findall(r"watch\?v=([0-9A-Za-z_-]{11})", html)
+        if video_ids:
+            return f"https://www.youtube.com/watch?v={video_ids[0]}"
+    except Exception as e:
+        print(f"Direct scraping error: {e}")
+    return f"https://www.youtube.com/results?search_query={query}"
 
 song_queues = {}
 current_songs = {}
@@ -98,7 +117,6 @@ def add_song_to_pl(guild_id, pl_name, song_title):
         return True
     return False
 
-# Pop-up modal: Hla play lai playlist-a dahna
 class AddToPlaylistModal(Modal, title="Playlist-ah Dahna"):
     pl_input = TextInput(
         label="Playlist Hming",
@@ -154,7 +172,6 @@ def play_next(ctx):
         current_songs.pop(ctx.guild.id, None)
         cleanup_cache()
 
-# Control Panel Buttons
 class MusicControlPanel(View):
     def __init__(self, ctx):
         super().__init__(timeout=None)
@@ -227,8 +244,6 @@ class MusicControlPanel(View):
         else:
             for i, s in enumerate(q[:10], start=1):
                 msg += f"{i}. {s['title']}\n"
-            if len(q) > 10:
-                msg += f"...leh hla {len(q) - 10} dang.\n"
         await interaction.response.send_message(msg, ephemeral=True)
 
     @button(label="Leave", style=discord.ButtonStyle.gray, emoji="👋", row=1)
@@ -278,7 +293,9 @@ async def play(ctx, *, search):
     async with ctx.typing():
         loop = asyncio.get_event_loop()
         try:
-            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(search, download=False))
+            # 403 Forbidden pumpelh nan direct video url zawng hmasa rawh
+            target_url = await loop.run_in_executor(None, lambda: get_youtube_video_url(search))
+            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(target_url, download=False))
             queue = get_queue(ctx.guild.id)
 
             if 'entries' in data and len(data['entries']) > 1:
@@ -293,7 +310,7 @@ async def play(ctx, *, search):
             else:
                 entry = data['entries'][0] if 'entries' in data and data['entries'] else data
                 title = entry.get('title', 'Hla')
-                url = entry.get('webpage_url') or entry.get('url', search)
+                url = entry.get('webpage_url') or entry.get('url', target_url)
                 queue.append({'title': title, 'search_url': url})
 
                 if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
@@ -317,7 +334,7 @@ async def loadplaylist(ctx, name: str):
     guild_id = str(ctx.guild.id)
 
     if guild_id not in playlists or name.lower() not in playlists[guild_id]:
-        await ctx.send(f"Playlist **{name}** a awm lo. Control panel-a **[📂 Playlists]** button hmangin i en thei.")
+        await ctx.send(f"Playlist **{name}** a awm lo.")
         return
 
     song_list = playlists[guild_id][name.lower()]
