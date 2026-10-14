@@ -8,7 +8,7 @@ import os
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-# Render health check bypass tura web server
+# Render health check bypass
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -30,20 +30,16 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# YouTube Cloud datacenter block pumpelhna settings
+# YouTube Cloud datacenter block bypass nan oauth2 plugin hman a ni
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': 'song_cache.%(ext)s',
     'noplaylist': True,
-    'quiet': True,
-    'no_warnings': True,
+    'quiet': False,
+    'no_warnings': False,
     'default_search': 'ytsearch1',
     'source_address': '0.0.0.0',
-    'extractor_args': {
-        'youtube': {
-            'player_client': ['android', 'web']
-        }
-    }
+    'username': 'oauth2',
 }
 
 ffmpeg_options = {
@@ -270,7 +266,7 @@ async def play(ctx, *, search):
                 play_next(ctx)
 
         except Exception as e:
-            await ctx.send("Hla lak chhuah theih a ni lo. Link dang emaw hla hming dang han tum chhin teh.")
+            await ctx.send("Hla lak chhuah theih a ni lo. Link dang han tum chhin teh.")
             print(f"Error in play: {e}")
 
 @bot.command()
@@ -320,4 +316,30 @@ async def viewplaylist(ctx, name: str):
     msg = f"🎶 **Playlist: {name.upper()} ({len(songs)} songs)**\n"
     for i, s in enumerate(songs, start=1):
         msg += f"{i}. {s}\n"
-                       
+    await ctx.send(msg)
+
+@bot.command()
+async def queue(ctx):
+    q = get_queue(ctx.guild.id)
+    curr = current_songs.get(ctx.guild.id, "Awm lo")
+    msg = f"🎶 **Play mek:** {curr}\n\n**📋 Queue:**\n"
+    if not q:
+        msg += "Queue-ah hla dah a awm lo."
+    else:
+        for i, s in enumerate(q[:10], start=1):
+            msg += f"{i}. {s['title']}\n"
+    await ctx.send(msg)
+
+@bot.command()
+async def skip(ctx):
+    vc = ctx.voice_client
+    if vc and (vc.is_playing() or vc.is_paused()):
+        vc.stop()
+        await ctx.send("⏭️ Hla skip a ni e!")
+
+token = os.environ.get("DISCORD_TOKEN")
+if token:
+    bot.run(token)
+else:
+    print("Error: DISCORD_TOKEN environment variable a awm lo!")
+    
