@@ -1,29 +1,21 @@
-FROM python:3.12-slim
+FROM python:3.11-slim
 
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
+# System tools, FFmpeg, opus audio library leh Node.js (YouTube JS token atan) dah vek rawh
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    libopus-dev \
+    nodejs \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# FFmpeg leh audio dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    ffmpeg \
-    ca-certificates \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Python dependencies
+# Dependencies install hmasakna
 COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
-
-# Bot files
+# File dang zawng zawng (bot.py, cookies.txt, etc.) copy rawh
 COPY . .
 
-# Render PORT
-ENV PORT=8080
-
-# Start bot
+# Bot run-na
 CMD ["python", "bot.py"]
