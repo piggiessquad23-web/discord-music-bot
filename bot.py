@@ -9,7 +9,6 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import static_ffmpeg
 
-# Static FFmpeg load rawh
 try:
     static_ffmpeg.add_paths()
 except Exception:
@@ -37,7 +36,7 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# YouTube cookie telhna (Render Cloud IP block bypass-na)
+# YouTube cookie leh JS token bypass settings
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': 'song_cache.%(ext)s',
@@ -47,7 +46,12 @@ ytdl_format_options = {
     'default_search': 'ytsearch1',
     'source_address': '0.0.0.0',
     'extract_flat': 'in_playlist',
-    'cookiefile': 'cookies.txt',  # GitHub-a i upload tak cookies.txt kha a hmang ang
+    'cookiefile': 'cookies.txt',
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['web', 'android'],
+        }
+    }
 }
 
 ffmpeg_options = {
@@ -115,7 +119,6 @@ class AddToPlaylistModal(Modal, title="Playlist-ah Dahna"):
         else:
             await interaction.response.send_message(f"ℹ️ Chu hla chu Playlist **{p_name}**-ah a awm sa tawh reng mai.", ephemeral=True)
 
-# Audio cache delete-na
 def cleanup_cache():
     for f in os.listdir("."):
         if f.startswith("song_cache."):
@@ -151,7 +154,7 @@ def play_next(ctx):
         current_songs.pop(ctx.guild.id, None)
         cleanup_cache()
 
-# Interactive Control Panel Buttons
+# Control Panel Buttons
 class MusicControlPanel(View):
     def __init__(self, ctx):
         super().__init__(timeout=None)
@@ -301,7 +304,7 @@ async def play(ctx, *, search):
                 play_next(ctx)
 
         except Exception as e:
-            await ctx.send("Hla lak chhuah theih a ni lo. Link emaw hla hming dang han tum chhin teh.")
+            await ctx.send(f"Hla lak chhuah theih a ni lo: {e}")
             print(f"Error in play: {e}")
 
 @bot.command()
