@@ -8,7 +8,7 @@ import os
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-# 1. Render Web Service health-check bypass
+# Render Web Service health-check bypass
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -30,21 +30,16 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 2. Cloud Server (Render IP) block pumpelhna iOS/TV client settings
+# Playlist leh search support kim thlap
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': 'song_cache.%(ext)s',
-    'noplaylist': True,
+    'noplaylist': False,
     'quiet': True,
     'no_warnings': True,
-    'default_search': 'ytsearch1',
+    'default_search': 'scsearch1',  # Hla hming zawn nan cloud-ah a tluang ber
     'source_address': '0.0.0.0',
-    'extractor_args': {
-        'youtube': {
-            'player_client': ['ios', 'tvhtml5'],
-            'skip': ['dash', 'hls']
-        }
-    }
+    'extract_flat': 'in_playlist',
 }
 
 ffmpeg_options = {
@@ -188,13 +183,25 @@ class MusicControlPanel(View):
         else:
             await interaction.response.send_message("Hla play mek a awm lo.", ephemeral=True)
 
-    @button(label="Save to Playlist", style=discord.ButtonStyle.green, emoji="💾", row=1)
+    @button(label="Save", style=discord.ButtonStyle.green, emoji="💾", row=1)
     async def save_to_playlist_button(self, interaction: discord.Interaction, btn: Button):
         song = current_songs.get(interaction.guild.id)
         if not song:
             await interaction.response.send_message("Hla play mek a awm lo.", ephemeral=True)
             return
         await interaction.response.send_modal(AddToPlaylistModal(song))
+
+    @button(label="Playlists", style=discord.ButtonStyle.primary, emoji="📂", row=1)
+    async def playlists_button(self, interaction: discord.Interaction, btn: Button):
+        playlists = load_saved_playlists()
+        gid = str(interaction.guild.id)
+        if gid not in playlists or not playlists[gid]:
+            await interaction.response.send_message("Playlist save a la awm lo. **[💾 Save]** button hmetin hla play lai hi save rawh le!", ephemeral=True)
+            return
+        msg = "**📂 I Playlist Save-te:**\n"
+        for pl_name, songs in playlists[gid].items():
+            msg += f"• **{pl_name}** ({len(songs)} songs)\n"
+        await interaction.response.send_message(msg, ephemeral=True)
 
     @button(label="Queue", style=discord.ButtonStyle.secondary, emoji="📋", row=1)
     async def queue_button(self, interaction: discord.Interaction, btn: Button):
@@ -206,6 +213,8 @@ class MusicControlPanel(View):
         else:
             for i, s in enumerate(q[:10], start=1):
                 msg += f"{i}. {s['title']}\n"
+            if len(q) > 10:
+                msg += f"...leh hla {len(q) - 10} dang.\n"
         await interaction.response.send_message(msg, ephemeral=True)
 
     @button(label="Leave", style=discord.ButtonStyle.gray, emoji="👋", row=1)
@@ -258,20 +267,31 @@ async def play(ctx, *, search):
             data = await loop.run_in_executor(None, lambda: ytdl.extract_info(search, download=False))
             queue = get_queue(ctx.guild.id)
 
-            entry = data['entries'][0] if 'entries' in data and data['entries'] else data
-            title = entry.get('title', 'Hla')
-            url = entry.get('webpage_url') or entry.get('url', search)
-            queue.append({'title': title, 'search_url': url})
+            # Playlist a nih chuan
+            if 'entries' in data and len(data['entries']) > 1:
+                count = 0
+                for entry in data['entries']:
+                    if entry:
+                        title = entry.get('title', 'Hla')
+                        url = entry.get('webpage_url') or entry.get('url')
+                        queue.append({'title': title, 'search_url': url})
+                        count += 1
+                await ctx.send(f"📑 Playlist atangin hla **{count}** queue-ah dah a ni e!")
+            else:
+                entry = data['entries'][0] if 'entries' in data and data['entries'] else data
+                title = entry.get('title', 'Hla')
+                url = entry.get('webpage_url') or entry.get('url', search)
+                queue.append({'title': title, 'search_url': url})
 
-            if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
-                await ctx.send(f"📋 Queue-ah dah a ni e: **{title}**")
+                if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
+                    await ctx.send(f"📋 Queue-ah dah a ni e: **{title}**")
 
             vc = ctx.voice_client
             if vc and not vc.is_playing() and not vc.is_paused():
                 play_next(ctx)
 
         except Exception as e:
-            await ctx.send("Hla lak chhuah theih a ni lo. Link dang emaw hla hming dang han tum chhin teh.")
+            await ctx.send("Hla lak chhuah theih a ni lo. Link emaw hla hming dang han tum chhin teh.")
             print(f"Error in play: {e}")
 
 @bot.command()
@@ -284,7 +304,7 @@ async def loadplaylist(ctx, name: str):
     guild_id = str(ctx.guild.id)
 
     if guild_id not in playlists or name.lower() not in playlists[guild_id]:
-        await ctx.send(f"Playlist **{name}** a awm lo. `!myplaylists` hmangin i playlist-te i en thei.")
+        await ctx.send(f"Playlist **{name}** a awm lo. Control panel-a **[📂 Playlists]** button hmangin i en thei.")
         return
 
     song_list = playlists[guild_id][name.lower()]
@@ -299,7 +319,7 @@ async def myplaylists(ctx):
     guild_id = str(ctx.guild.id)
 
     if guild_id not in playlists or not playlists[guild_id]:
-        await ctx.send("Playlist a la awm lo. Hla i play laiin **[💾 Save to Playlist]** button hmet rawh.")
+        await ctx.send("Playlist a la awm lo. Hla i play laiin **[💾 Save]** button hmet rawh.")
         return
 
     msg = "**📂 I Playlist-te:**\n"
@@ -347,4 +367,4 @@ if token:
     bot.run(token)
 else:
     print("Error: DISCORD_TOKEN environment variable a awm lo!")
-    
+                
