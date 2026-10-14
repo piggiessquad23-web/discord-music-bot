@@ -9,7 +9,7 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import static_ffmpeg
 
-# Render chhungah FFmpeg binary hmuh theih nan
+# Static FFmpeg load rawh
 try:
     static_ffmpeg.add_paths()
 except Exception:
@@ -20,7 +20,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot is online and healthy!")
+        self.wfile.write(b"Music bot is online and healthy!")
 
     def log_message(self, format, *args):
         pass
@@ -37,7 +37,7 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Hla download-a play zawk nan (Connection reset by peer a bo vek ang)
+# YouTube cookie telhna (Render Cloud IP block bypass-na)
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': 'song_cache.%(ext)s',
@@ -47,9 +47,11 @@ ytdl_format_options = {
     'default_search': 'ytsearch1',
     'source_address': '0.0.0.0',
     'extract_flat': 'in_playlist',
+    'cookiefile': 'cookies.txt',  # GitHub-a i upload tak cookies.txt kha a hmang ang
 }
 
 ffmpeg_options = {
+    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
     'options': '-vn',
 }
 
@@ -85,17 +87,18 @@ def add_song_to_pl(guild_id, pl_name, song_title):
     p_name = pl_name.lower().strip()
     if p_name not in playlists[gid]:
         playlists[gid][p_name] = []
-    
+
     if song_title not in playlists[gid][p_name]:
         playlists[gid][p_name].append(song_title)
         save_playlists_to_file(playlists)
         return True
     return False
 
+# Pop-up modal: Hla play lai playlist-a dahna
 class AddToPlaylistModal(Modal, title="Playlist-ah Dahna"):
     pl_input = TextInput(
         label="Playlist Hming",
-        placeholder="Entirnan: myfav, zofolk",
+        placeholder="Entirnan: myfav, zofolk, chill",
         required=True,
         max_length=30
     )
@@ -110,9 +113,9 @@ class AddToPlaylistModal(Modal, title="Playlist-ah Dahna"):
         if added:
             await interaction.response.send_message(f"✅ **{self.song_title}** chu Playlist **{p_name}**-ah dah a ni e!", ephemeral=True)
         else:
-            await interaction.response.send_message(f"ℹ️ Chu hla chu Playlist **{p_name}**-ah a lo awm sa tawh reng mai.", ephemeral=True)
+            await interaction.response.send_message(f"ℹ️ Chu hla chu Playlist **{p_name}**-ah a awm sa tawh reng mai.", ephemeral=True)
 
-# Audio file hlui delete-na
+# Audio cache delete-na
 def cleanup_cache():
     for f in os.listdir("."):
         if f.startswith("song_cache."):
@@ -128,7 +131,6 @@ def play_next(ctx):
         current_songs[ctx.guild.id] = next_song['title']
         try:
             cleanup_cache()
-            # File download nghal rawh
             info = ytdl.extract_info(next_song['search_url'], download=True)
             if 'entries' in info and info['entries']:
                 info = info['entries'][0]
@@ -136,19 +138,20 @@ def play_next(ctx):
 
             source = discord.FFmpegPCMAudio(filename, **ffmpeg_options)
             ctx.voice_client.play(source, after=lambda e: play_next(ctx))
-            
+
             panel_view = MusicControlPanel(ctx)
             asyncio.run_coroutine_threadsafe(
                 ctx.send(f"🎵 **Tunah ka play mek:** {next_song['title']}", view=panel_view),
                 bot.loop
             )
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"Error in play_next: {e}")
             play_next(ctx)
     else:
         current_songs.pop(ctx.guild.id, None)
         cleanup_cache()
 
+# Interactive Control Panel Buttons
 class MusicControlPanel(View):
     def __init__(self, ctx):
         super().__init__(timeout=None)
@@ -191,13 +194,25 @@ class MusicControlPanel(View):
         else:
             await interaction.response.send_message("Hla play mek a awm lo.", ephemeral=True)
 
-    @button(label="Save to Playlist", style=discord.ButtonStyle.green, emoji="💾", row=1)
+    @button(label="Save", style=discord.ButtonStyle.green, emoji="💾", row=1)
     async def save_to_playlist_button(self, interaction: discord.Interaction, btn: Button):
         song = current_songs.get(interaction.guild.id)
         if not song:
             await interaction.response.send_message("Hla play mek a awm lo.", ephemeral=True)
             return
         await interaction.response.send_modal(AddToPlaylistModal(song))
+
+    @button(label="Playlists", style=discord.ButtonStyle.primary, emoji="📂", row=1)
+    async def playlists_button(self, interaction: discord.Interaction, btn: Button):
+        playlists = load_saved_playlists()
+        gid = str(interaction.guild.id)
+        if gid not in playlists or not playlists[gid]:
+            await interaction.response.send_message("Playlist save a la awm lo. **[💾 Save]** button hmetin save rawh le!", ephemeral=True)
+            return
+        msg = "**📂 I Playlist Save-te:**\n"
+        for pl_name, songs in playlists[gid].items():
+            msg += f"• **{pl_name}** ({len(songs)} songs)\n"
+        await interaction.response.send_message(msg, ephemeral=True)
 
     @button(label="Queue", style=discord.ButtonStyle.secondary, emoji="📋", row=1)
     async def queue_button(self, interaction: discord.Interaction, btn: Button):
@@ -237,7 +252,7 @@ async def join(ctx):
             await channel.connect()
         await ctx.send(f"🔊 **{channel.name}**-ah ka lo lut e!")
     else:
-        await ctx.send("Voice channel-ah lut hmasa phawt rawwh!")
+        await ctx.send("Voice channel-ah lut hmasa phawt rawh!")
 
 @bot.command()
 async def leave(ctx):
@@ -260,32 +275,34 @@ async def play(ctx, *, search):
     async with ctx.typing():
         loop = asyncio.get_event_loop()
         try:
-            # Metadata chauh la hmasa rawh
             data = await loop.run_in_executor(None, lambda: ytdl.extract_info(search, download=False))
             queue = get_queue(ctx.guild.id)
 
-            if 'entries' in data:
+            if 'entries' in data and len(data['entries']) > 1:
                 count = 0
                 for entry in data['entries']:
                     if entry:
                         title = entry.get('title', 'Hla')
-                        url = entry.get('url') or entry.get('webpage_url')
+                        url = entry.get('webpage_url') or entry.get('url')
                         queue.append({'title': title, 'search_url': url})
                         count += 1
                 await ctx.send(f"📑 Playlist atangin hla **{count}** queue-ah dah a ni e!")
             else:
-                title = data.get('title', 'Hla')
-                url = data.get('webpage_url', search)
+                entry = data['entries'][0] if 'entries' in data and data['entries'] else data
+                title = entry.get('title', 'Hla')
+                url = entry.get('webpage_url') or entry.get('url', search)
                 queue.append({'title': title, 'search_url': url})
-                await ctx.send(f"📋 Queue-ah dah a ni e: **{title}**")
+
+                if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
+                    await ctx.send(f"📋 Queue-ah dah a ni e: **{title}**")
 
             vc = ctx.voice_client
-            if not vc.is_playing() and not vc.is_paused():
+            if vc and not vc.is_playing() and not vc.is_paused():
                 play_next(ctx)
 
         except Exception as e:
-            await ctx.send("Hla/Playlist lak chhuah theih a ni lo.")
-            print(f"Error: {e}")
+            await ctx.send("Hla lak chhuah theih a ni lo. Link emaw hla hming dang han tum chhin teh.")
+            print(f"Error in play: {e}")
 
 @bot.command()
 async def loadplaylist(ctx, name: str):
@@ -297,7 +314,7 @@ async def loadplaylist(ctx, name: str):
     guild_id = str(ctx.guild.id)
 
     if guild_id not in playlists or name.lower() not in playlists[guild_id]:
-        await ctx.send(f"Playlist **{name}** a awm lo. `!myplaylists` hmangin i playlist-te i en thei.")
+        await ctx.send(f"Playlist **{name}** a awm lo. Control panel-a **[📂 Playlists]** button hmangin i en thei.")
         return
 
     song_list = playlists[guild_id][name.lower()]
@@ -312,7 +329,7 @@ async def myplaylists(ctx):
     guild_id = str(ctx.guild.id)
 
     if guild_id not in playlists or not playlists[guild_id]:
-        await ctx.send("Playlist a la awm lo. Hla i play laiin **[💾 Save to Playlist]** button hmet rawh.")
+        await ctx.send("Playlist a la awm lo. Hla i play laiin **[💾 Save]** button hmet rawh.")
         return
 
     msg = "**📂 I Playlist-te:**\n"
@@ -355,10 +372,9 @@ async def skip(ctx):
         vc.stop()
         await ctx.send("⏭️ Hla skip a ni e!")
 
-# Render Cloud-a Environment Variable atanga Token lakna
 token = os.environ.get("DISCORD_TOKEN")
 if token:
     bot.run(token)
 else:
     print("Error: DISCORD_TOKEN environment variable a awm lo!")
-            
+    
