@@ -41,6 +41,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 # Format restriction paih vek a ni (format engpawh awm apiang a la tawp ang)
 ytdl_format_options = {
+    'format': '140/251/ba/b',
     'noplaylist': True,
     'quiet': True,
     'no_warnings': True,
@@ -48,10 +49,11 @@ ytdl_format_options = {
     'cookiefile': 'cookies.txt',
     'extractor_args': {
         'youtube': {
-            'player_client': ['android', 'web'],
+            'player_client': ['web'],
         }
     }
 }
+
 
 ffmpeg_options = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
