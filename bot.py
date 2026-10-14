@@ -1,13 +1,15 @@
 import discord
 from discord.ext import commands
 from discord.ui import View, button, Button, Modal, TextInput
+import yt_dlp
 import asyncio
 import json
 import os
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import static_ffmpeg
-import requests
+import urllib.request
+import urllib.parse
 import re
 
 static_ffmpeg.add_paths()
@@ -34,54 +36,44 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# YouTube audio extraction options
+ytdl_format_options = {
+    'format': 'bestaudio/best',
+    'noplaylist': True,
+    'quiet': True,
+    'no_warnings': True,
+    'source_address': '0.0.0.0',
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['android', 'ios'],
+        }
+    }
+}
+
 ffmpeg_options = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
     'options': '-vn',
 }
 
-# YouTube Cloud IP Block bypass-na Piped Instances
-PIPED_INSTANCES = [
-    "https://pipedapi.kavin.rocks",
-    "https://api.piped.privacydev.net",
-    "https://piped-api.lunar.icu",
-    "https://api.piped.projectsegfau.lt"
-]
+ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 
-def extract_video_id(query):
-    # Link pangngai a nih chuan video ID la chhuak rawh
-    match = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11}).*", query)
-    if match:
-        return match.group(1)
-    return None
-
-def get_audio_stream_piped(query):
-    video_id = extract_video_id(query)
+def search_youtube_url(query):
+    # Link a nih sa chuan direct-in pe tawp rawh
+    if query.startswith("http://") or query.startswith("https://"):
+        return query
     
-    for base in PIPED_INSTANCES:
-        try:
-            # Video ID a nih lohva search text a nih chuan
-            if not video_id:
-                s_res = requests.get(f"{base}/search?q={query}&filter=videos", timeout=5)
-                if s_res.status_code == 200:
-                    items = s_res.json().get("items", [])
-                    if items:
-                        video_id = items[0].get("url", "").replace("/watch?v=", "")
-                        title = items[0].get("title", query)
-            
-            if video_id:
-                v_res = requests.get(f"{base}/streams/{video_id}", timeout=5)
-                if v_res.status_code == 200:
-                    data = v_res.json()
-                    title = data.get("title", "Hla")
-                    audio_streams = data.get("audioStreams", [])
-                    if audio_streams:
-                        # Audio stream tha ber URL
-                        audio_url = audio_streams[-1]["url"]
-                        return {"title": title, "url": audio_url}
-        except Exception:
-            continue
-            
-    return None
+    # YouTube HTML search hmanga Video ID zawn hmasakna (Cloud block a awm lo)
+    query_encoded = urllib.parse.quote(query)
+    url = f"https://www.youtube.com/results?search_query={query_encoded}"
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+    try:
+        html = urllib.request.urlopen(req, timeout=10).read().decode('utf-8')
+        video_ids = re.findall(r"watch\?v=(\S{11})", html)
+        if video_ids:
+            return f"https://www.youtube.com/watch?v={video_ids[0]}"
+    except Exception as e:
+        print(f"Search error: {e}")
+    return query
 
 song_queues = {}
 current_songs = {}
@@ -146,7 +138,7 @@ def play_next(ctx):
         next_song = queue.pop(0)
         current_songs[ctx.guild.id] = next_song['title']
         try:
-            source = discord.FFmpegPCMAudio(next_song['url'], **ffmpeg_options)
+            source = discord.FFmpegPCMAudio(next_song['audio_url'], **ffmpeg_options)
             ctx.voice_client.play(source, after=lambda e: play_next(ctx))
 
             panel_view = MusicControlPanel(ctx)
@@ -280,19 +272,31 @@ async def play(ctx, *, search):
 
     async with ctx.typing():
         loop = asyncio.get_event_loop()
-        song_data = await loop.run_in_executor(None, lambda: get_audio_stream_piped(search))
-        
-        if not song_data:
-            await ctx.send("Hla a hmu zo lo tlat mai, hming dang han tum chhin teh.")
-            return
+        try:
+            # 1. YouTube direct video URL zawng hmasa rawh
+            target_url = await loop.run_in_executor(None, lambda: search_youtube_url(search))
+            
+            # 2. yt-dlp hmanga audio direct stream la chhuak rawh
+            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(target_url, download=False))
+            
+            if 'entries' in data and data['entries']:
+                data = data['entries'][0]
 
-        queue = get_queue(ctx.guild.id)
-        queue.append(song_data)
+            title = data.get('title', 'Hla')
+            audio_url = data['url']
 
-        if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
-            await ctx.send(f"📋 Queue-ah dah a ni e: **{song_data['title']}**")
-        else:
-            play_next(ctx)
+            song_data = {'title': title, 'audio_url': audio_url}
+            queue = get_queue(ctx.guild.id)
+            queue.append(song_data)
+
+            if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
+                await ctx.send(f"📋 Queue-ah dah a ni e: **{title}**")
+            else:
+                play_next(ctx)
+
+        except Exception as e:
+            await ctx.send(f"Hla lak chhuah theih a ni lo: {e}")
+            print(f"Error in play: {e}")
 
 @bot.command()
 async def loadplaylist(ctx, name: str):
@@ -367,4 +371,3 @@ if token:
     bot.run(token)
 else:
     print("Error: DISCORD_TOKEN environment variable a awm lo!")
-        
